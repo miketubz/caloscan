@@ -5,8 +5,39 @@ export default async function handler(req, res) {
     if (!image) return res.status(400).json({ error: 'No image provided' });
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY in Vercel environment variables.' });
 
-    const prompt = `Analyze this meal photo and estimate nutrition. Return JSON only with: calories, protein_g, carbs_g, fat_g, confidence_percent, items [{name, portion, calories}], notes. Be careful: this is an estimate, not medical advice. User notes: ${notes || 'none'}`;
+    const prompt = `
+Analyze this food photo for calorie estimation.
 
+IMPORTANT RULES:
+- If the user notes/description says there is only one item, return ONLY that one food item.
+- Do NOT invent extra foods.
+- Do NOT list background objects, plates, sauce stains, table items, or possible hidden ingredients.
+- If unsure, use the user's description as the main source of truth.
+- Return JSON only.
+
+User description:
+${notes || "No user description provided"}
+
+Return this JSON format:
+{
+  "calories": number,
+  "protein_g": number,
+  "carbs_g": number,
+  "fat_g": number,
+  "confidence_percent": number,
+  "items": [
+    {
+      "name": "food item name",
+      "portion": "estimated portion",
+      "calories": number,
+      "protein_g": number,
+      "carbs_g": number,
+      "fat_g": number
+    }
+  ],
+  "summary": "short explanation"
+}
+`;
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
