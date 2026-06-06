@@ -1,23 +1,51 @@
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Camera, Upload, Flame, Dumbbell, Wheat, Droplets, Loader2, Plus, Trash2 } from 'lucide-react';
+import { Camera, Upload, Flame, Dumbbell, Wheat, Droplets, Loader2, Trash2 } from 'lucide-react';
 import './style.css';
 
 function Stat({ icon, label, value, unit }) {
-  return <div className="stat"><div className="ico">{icon}</div><b>{value}{unit}</b><span>{label}</span></div>;
+  return (
+    <div className="stat">
+      <div className="ico">{icon}</div>
+      <b>{value}{unit}</b>
+      <span>{label}</span>
+    </div>
+  );
 }
 
-function fallbackEstimate() {
-  return {
-    calories: 882, protein_g: 52, carbs_g: 59, fat_g: 48, confidence_percent: 55,
-    items: [
-      { name: 'Rice', portion: 'about 1 cup', calories: 200 },
-      { name: 'Fried eggs', portion: '2 pieces', calories: 180 },
-      { name: 'Meat dish', portion: 'medium serving', calories: 350 },
-      { name: 'Noodles / pancit', portion: 'small serving', calories: 150 }
-    ],
-    notes: 'Demo estimate. Add an API key for real photo scanning.'
-  };
+async function compressImage(file, maxWidth = 900, quality = 0.65) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    const img = new Image();
+
+    reader.onload = () => {
+      img.src = reader.result;
+    };
+
+    img.onload = () => {
+      let width = img.width;
+      let height = img.height;
+
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width = maxWidth;
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+
+    reader.onerror = reject;
+    img.onerror = reject;
+
+    reader.readAsDataURL(file);
+  });
 }
 
 function App() {
@@ -26,69 +54,160 @@ function App() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState(() => JSON.parse(localStorage.getItem('history') || '[]'));
+  const [error, setError] = useState('');
 
-  const onFile = e => {
+  const onFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => { setImage(reader.result); setResult(null); };
-    reader.readAsDataURL(file);
+
+    setError('');
+    setResult(null);
+
+    try {
+      const compressed = await compressImage(file);
+      setImage(compressed);
+    } catch {
+      setError('Image failed to load. Please try another photo.');
+    }
   };
 
   async function analyze() {
-    if (!image) return;
+    if (!image) {
+      setError('Please upload a food photo first.');
+      return;
+    }
+
     setLoading(true);
+    setError('');
+
     try {
-      const r = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image, notes }) });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error);
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image, notes })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error || 'Analysis failed.');
+
       setResult(data);
-    } catch (e) {
-      setResult({ ...fallbackEstimate(), notes: e.message || 'Using demo estimate.' });
-    } finally { setLoading(false); }
+
+      const entry = {
+        id: Date.now(),
+        date: new Date().toLocaleString(),
+        image,
+        notes,
+        result: data
+      };
+
+      const next = [entry, ...history].slice(0, 10);
+      setHistory(next);
+      localStorage.setItem('history', JSON.stringify(next));
+    } catch (err) {
+      setError(err.message || 'Something went wrong.');
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function save() {
-    const entry = { ...result, date: new Date().toLocaleString(), image };
-    const next = [entry, ...history].slice(0, 30);
-    setHistory(next); localStorage.setItem('history', JSON.stringify(next));
+  function clearHistory() {
+    setHistory([]);
+    localStorage.removeItem('history');
   }
 
-  function clearHistory() { setHistory([]); localStorage.removeItem('history'); }
+  return (
+    <main className="app">
+      <section className="panel">
+        <h1>CalorieScan</h1>
+        <p className="sub">Take a food photo, add details, and estimate calories + macros.</p>
 
-  return <main>
-    <section className="hero">
-      <div><h1>CalorieScan</h1><p>Take a food photo, add details, and estimate calories + macros.</p></div>
-    </section>
+        {result && (
+          <div className="stats">
+            <Stat icon={<Flame size={18} />} label="Calories" value={result.calories || 0} unit="" />
+            <Stat icon={<Dumbbell size={18} />} label="Protein" value={result.protein_g || 0} unit="g" />
+            <Stat icon={<Wheat size={18} />} label="Carbs" value={result.carbs_g || 0} unit="g" />
+            <Stat icon={<Droplets size={18} />} label="Fats" value={result.fat_g || 0} unit="g" />
+          </div>
+        )}
 
-    <label className="upload">
-      {image ? <img src={image} /> : <div><Camera size={42}/><b>Tap to scan meal</b><span>Camera or gallery</span></div>}
-      <input type="file" accept="image/*" capture="environment" onChange={onFile}/>
-    </label>
+        <label className="upload">
+          {image ? (
+            <img src={image} alt="Meal preview" />
+          ) : (
+            <div className="placeholder">
+              <Camera size={34} />
+              <b>Tap to scan meal</b>
+              <span>Camera or gallery</span>
+            </div>
+          )}
 
-    <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Optional: e.g. 2 eggs, 1 cup rice, pork adobo, small noodles..." />
-    <button className="primary" disabled={!image || loading} onClick={analyze}>{loading ? <Loader2 className="spin"/> : <Upload/>} Analyze calories</button>
+          <input type="file" accept="image/*" capture="environment" onChange={onFile} hidden />
+        </label>
 
-    {result && <section className="card">
-      <div className="grid">
-        <Stat icon={<Flame/>} value={Math.round(result.calories || 0)} unit="" label="CALORIES" />
-        <Stat icon={<Dumbbell/>} value={Math.round(result.protein_g || 0)} unit="g" label="PROTEIN" />
-        <Stat icon={<Wheat/>} value={Math.round(result.carbs_g || 0)} unit="g" label="CARBS" />
-        <Stat icon={<Droplets/>} value={Math.round(result.fat_g || 0)} unit="g" label="FATS" />
-      </div>
-      <p className="confidence">Confidence: {result.confidence_percent || '?'}%</p>
-      <h3>Detected food</h3>
-      {(result.items || []).map((x,i)=><div className="item" key={i}><span>{x.name}<small>{x.portion}</small></span><b>{x.calories} cal</b></div>)}
-      <p className="note">{result.notes}</p>
-      <button className="save" onClick={save}><Plus/> Save to history</button>
-    </section>}
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Example: Only one item: 1 banana"
+        />
 
-    <section className="card">
-      <div className="row"><h3>History</h3>{history.length>0 && <button className="link" onClick={clearHistory}><Trash2 size={16}/>Clear</button>}</div>
-      {history.length === 0 ? <p className="muted">No saved scans yet.</p> : history.map((h,i)=><div className="history" key={i}><img src={h.image}/><div><b>{h.calories} calories</b><small>{h.date}</small></div></div>)}
-    </section>
-    <p className="footer">Estimates only. For diabetes, HbA1c, or diet targets, confirm with a healthcare professional.</p>
-  </main>
+        <button onClick={analyze} disabled={loading}>
+          {loading ? <Loader2 className="spin" size={18} /> : <Upload size={18} />}
+          {loading ? 'Analyzing...' : 'Analyze calories'}
+        </button>
+
+        {error && <div className="error">{error}</div>}
+
+        {result && (
+          <div className="result">
+            <h2>Detected food</h2>
+
+            <ul>
+              {(result.items || []).map((item, i) => (
+                <li key={i}>
+                  <b>{item.name}</b>
+                  <span>{item.portion || 'estimated portion'}</span>
+                  <small>{item.calories || 0} kcal</small>
+                </li>
+              ))}
+            </ul>
+
+            {result.confidence_percent && (
+              <p className="note">Confidence: {result.confidence_percent}%</p>
+            )}
+
+            {result.summary && <p className="note">{result.summary}</p>}
+          </div>
+        )}
+
+        <div className="historyHead">
+          <h2>History</h2>
+          {history.length > 0 && (
+            <button className="iconBtn" onClick={clearHistory}>
+              <Trash2 size={16} />
+            </button>
+          )}
+        </div>
+
+        <div className="history">
+          {history.length === 0 && <p className="muted">No saved scans yet.</p>}
+
+          {history.map((h) => (
+            <div className="historyItem" key={h.id}>
+              <img src={h.image} alt="History meal" />
+              <div>
+                <b>{h.result?.calories || 0} kcal</b>
+                <span>{h.notes || 'No description'}</span>
+                <small>{h.date}</small>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <p className="footer">Estimates only. Not medical advice.</p>
+      </section>
+    </main>
+  );
 }
 
 createRoot(document.getElementById('root')).render(<App />);
